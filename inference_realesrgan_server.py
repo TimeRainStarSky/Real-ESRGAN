@@ -1,4 +1,9 @@
-import argparse
+import flask
+server = flask.Flask(__name__)
+import sys
+import numpy as np
+from urllib import request
+
 import cv2
 import glob
 import os
@@ -8,51 +13,31 @@ from basicsr.utils.download_util import load_file_from_url
 from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 
+blacklist = []
 
+@server.route('/')
 def main():
-  """Inference demo for Real-ESRGAN.
-  """
-  parser = argparse.ArgumentParser()
-  parser.add_argument('-i', '--input', type=str, default='inputs', help='Input image or folder')
-  parser.add_argument(
-    '-n',
-    '--model_name',
-    type=str,
-    default='RealESRGAN_x4plus',
-    help=('Model names: RealESRGAN_x4plus | RealESRNet_x4plus | RealESRGAN_x4plus_anime_6B | RealESRGAN_x2plus | '
-        'realesr-animevideov3 | realesr-general-x4v3'))
-  parser.add_argument('-o', '--output', type=str, default='results', help='Output folder')
-  parser.add_argument(
-    '-dn',
-    '--denoise_strength',
-    type=float,
-    default=0.5,
-    help=('Denoise strength. 0 for weak denoise (keep noise), 1 for strong denoise ability. '
-        'Only used for the realesr-general-x4v3 model'))
-  parser.add_argument('-s', '--outscale', type=float, default=4, help='The final upsampling scale of the image')
-  parser.add_argument(
-    '--model_path', type=str, default=None, help='[Option] Model path. Usually, you do not need to specify it')
-  parser.add_argument('--suffix', type=str, default='out', help='Suffix of the restored image')
-  parser.add_argument('-t', '--tile', type=int, default=0, help='Tile size, 0 for no tile during testing')
-  parser.add_argument('--tile_pad', type=int, default=10, help='Tile padding')
-  parser.add_argument('--pre_pad', type=int, default=0, help='Pre padding size at each border')
-  parser.add_argument('--face_enhance', action='store_true', help='Use GFPGAN to enhance face')
-  parser.add_argument(
-    '--fp32', action='store_true', help='Use fp32 precision during inference. Default: fp16 (half precision).')
-  parser.add_argument(
-    '--alpha_upsampler',
-    type=str,
-    default='realesrgan',
-    help='The upsampler for the alpha channels. Options: realesrgan | bicubic')
-  parser.add_argument(
-    '--ext',
-    type=str,
-    default='auto',
-    help='Image extension. Options: auto | jpg | png, auto means using the same extension as inputs')
-  parser.add_argument(
-    '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
+  class args:
+    input            = flask.request.args.get('input', type=str, default=None)
+    model_name       = flask.request.args.get('model_name', type=str, default='RealESRGAN_x4plus',)
+    denoise_strength = flask.request.args.get('denoise_strength', type=float, default=0.5)
+    outscale         = flask.request.args.get('outscale', type=float, default=4)
+    model_path       = flask.request.args.get('model_path', type=str, default=None)
+    suffix           = flask.request.args.get('suffix', type=str, default='out')
+    tile             = flask.request.args.get('tile', type=int, default=0)
+    tile_pad         = flask.request.args.get('tile_pad', type=int, default=10)
+    pre_pad          = flask.request.args.get('pre_pad', type=int, default=0)
+    face_enhance     = flask.request.args.get('face_enhance', type=bool, default=False)
+    fp32             = flask.request.args.get('fp32', type=bool, default=False)
+    alpha_upsampler  = flask.request.args.get('alpha_upsampler', type=str, default='realesrgan')
+    ext              = flask.request.args.get('ext', type=str, default='auto')
+    gpu_id           = flask.request.args.get('gpu-id', type=int, default=None)
 
-  args = parser.parse_args()
+  bot_id = flask.request.args.get('bot_id', type=int)
+  user_id = flask.request.args.get('user_id', type=int)
+  print('BotID：', bot_id, '\n用户ID：', user_id, '\n图片修复：', args.input, sep='')
+  if not user_id or user_id in blacklist:
+    return '无效请求'
 
   # determine models according to model names
   args.model_name = args.model_name.split('.')[0]
@@ -123,44 +108,26 @@ def main():
       arch='clean',
       channel_multiplier=2,
       bg_upsampler=upsampler)
-  os.makedirs(args.output, exist_ok=True)
 
-  if os.path.isfile(args.input):
-    paths = [args.input]
-  else:
-    paths = sorted(glob.glob(os.path.join(args.input, '*')))
-
-  for idx, path in enumerate(paths):
-    imgname, extension = os.path.splitext(os.path.basename(path))
-    print('Testing', idx, imgname)
-
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+  try:
+    res = request.urlopen(args.input)
+    img = np.asarray(bytearray(res.read()), dtype='uint8')
+    img = cv2.imdecode(img, cv2.IMREAD_UNCHANGED)
     if len(img.shape) == 3 and img.shape[2] == 4:
       img_mode = 'RGBA'
     else:
       img_mode = None
 
-    try:
-      if args.face_enhance:
-        _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
-      else:
-        output, _ = upsampler.enhance(img, outscale=args.outscale)
-    except RuntimeError as error:
-      print('Error', error)
-      print('If you encounter CUDA out of memory, try to set --tile with a smaller number.')
+    if args.face_enhance:
+      _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
     else:
-      if args.ext == 'auto':
-        extension = extension[1:]
-      else:
-        extension = args.ext
-      if img_mode == 'RGBA':  # RGBA images should be saved in png format
-        extension = 'png'
-      if args.suffix == '':
-        save_path = os.path.join(args.output, f'{imgname}.{extension}')
-      else:
-        save_path = os.path.join(args.output, f'{imgname}_{args.suffix}.{extension}')
-      cv2.imwrite(save_path, output)
+      output, _ = upsampler.enhance(img, outscale=args.outscale)
 
+    bytes = cv2.imencode('.jpg', output)[1].tobytes()
+  except Exception as e:
+    print('错误：', e, sep='')
+    return flask.redirect('http://ovooa.com/API/yi')
+  return flask.Response(bytes, mimetype='image/jpeg')
 
 if __name__ == '__main__':
-  main()
+  server.run(host='0.0.0.0', port=sys.argv[1])

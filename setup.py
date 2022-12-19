@@ -72,13 +72,6 @@ def get_version():
     return locals()['__version__']
 
 
-def get_requirements(filename='requirements.txt'):
-    here = os.path.dirname(os.path.realpath(__file__))
-    with open(os.path.join(here, filename), 'r') as f:
-        requires = [line.replace('\n', '') for line in f.readlines()]
-    return requires
-
-
 if __name__ == '__main__':
     write_version_py()
     setup(
@@ -103,5 +96,4 @@ if __name__ == '__main__':
         ],
         license='BSD-3-Clause License',
         setup_requires=['cython', 'numpy'],
-        install_requires=get_requirements(),
         zip_safe=False)
